@@ -11,7 +11,7 @@ Takes firms that filed tax returns with the IRS and checks whether each one is a
 
 ---
 
-## Part 1: How it works, in plain English
+## Part 1: How it works
 
 ### Why this exists
 
