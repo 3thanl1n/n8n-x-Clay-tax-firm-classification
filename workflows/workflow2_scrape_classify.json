@@ -1,0 +1,1131 @@
+{
+  "name": "Find Companies → Scrape → AI Classify → Google Sheets",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "daf2c582-6af6-47a7-be05-0ed493d104f7",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -528,
+        -656
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/1bHruYu5TiWrYruBZITFwb3Hduz6np1-HIf9eMqZfgOA/edit?gid=0#gid=0"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Clay Output: Find",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1bHruYu5TiWrYruBZITFwb3Hduz6np1-HIf9eMqZfgOA/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "645f80dc-1c71-42f9-8a2a-559e126f15b9",
+      "name": "Read Clay Output",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -224,
+        -688
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BoDXRlwL0pSPCOOZ",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Clay Output rows — reference by node name\nconst clayRows = $('Read Clay Output').all();\n\n// Already-processed rows from Results sheet — handle empty sheet\nconst processedItems = $input.all();\nlet processedEINs = new Set();\n\ntry {\n  // Only build the set if results sheet has data with ein column\n  if (processedItems.length > 0 && processedItems[0].json.ein !== undefined) {\n    processedEINs = new Set(\n      processedItems.map(item => String(item.json.ein || '')).filter(id => id !== '')\n    );\n  }\n} catch (e) {\n  // First run — results sheet is empty or has no columns yet\n  processedEINs = new Set();\n}\n\nfunction cleanUrl(url) {\n  if (!url) return '';\n  url = url.trim();\n  if (!url.startsWith('http')) return 'https://' + url;\n  return url;\n}\n\n// Filter to only NEW rows not yet in results\nconst newRows = clayRows.filter(item => {\n  const ein = String(item.json.ein || '');\n  return ein && !processedEINs.has(ein);\n});\n\n// Apply domain selection on new rows only\nconst results = newRows.map(item => {\n  const d = item.json;\n  let bestUrl = '';\n  let source = '';\n\n  if (d.company_website && d.company_website.trim() !== '') {\n    bestUrl = cleanUrl(d.company_website);\n    source = 'ai_validated';\n  } else if (d.domain && d.domain.trim() !== '') {\n    bestUrl = cleanUrl(d.domain);\n    source = 'default_enrichment';\n  }\n\n  if (!bestUrl) return null;\n\n  return {\n    json: {\n      ein: d.ein || '',\n      legal_name: d.legal_name || '',\n      dba_name: d.dba_name || '',\n      city: d.city || '',\n      state: d.state || '',\n      avg_returns_2yr: d.avg_returns_2yr || '',\n      domain: d.domain || '',\n      company_website: bestUrl,\n      domain_source: source\n    }\n  };\n}).filter(item => item !== null);\n\nreturn results;"
+      },
+      "id": "bdcedbbe-9afb-4583-a053-c4e046ce2226",
+      "name": "Select Best Domain",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        -592
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "759b7540-cbff-4849-a514-f98940284be4",
+      "name": "Loop Over Companies",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        704,
+        -848
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "scrape",
+        "url": "={{ $json.company_website }}",
+        "scrapeOptions": {
+          "options": {
+            "formats": {
+              "format": [
+                {}
+              ]
+            },
+            "headers": {}
+          }
+        },
+        "requestOptions": {}
+      },
+      "id": "76d1295e-5ff5-4b2a-a935-c8c76bfd6c05",
+      "name": "Firecrawl Scrape",
+      "type": "@mendable/n8n-nodes-firecrawl.firecrawl",
+      "typeVersion": 1,
+      "position": [
+        1088,
+        -864
+      ],
+      "credentials": {
+        "firecrawlApi": {
+          "id": "YYUiHhRb25DyHobf",
+          "name": "Firecrawl API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5.2",
+          "mode": "list",
+          "cachedResultName": "GPT-5.2"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=Company: {{ $('Loop Over Companies').item.json.dba_name }}\nLegal Name: {{ $('Loop Over Companies').item.json.legal_name }}\nLocation: {{ $('Loop Over Companies').item.json.city }}, {{ $('Loop Over Companies').item.json.state }}\nAvg Returns Filed (2yr): {{ $('Loop Over Companies').item.json.avg_returns_2yr }}\nDomain: {{ $('Loop Over Companies').item.json.domain }}\n\nWebsite Content:\n{{ $json.data?.markdown ? $json.data.markdown.substring(0, 3000) : ($json.markdown ? $json.markdown.substring(0, 3000) : 'No website content available - classify based on company name and filing data only') }}"
+            },
+            {
+              "role": "system",
+              "content": "=You are a business classifier specializing in identifying tax preparation and accounting firms. Analyze the provided website content and company information. Determine if this is a legitimate tax preparation or accounting firm that actively files tax returns for clients.\n\nYou MUST respond with ONLY a valid JSON object matching this exact schema, no other text or markdown:\n\n{\n  \"is_tax_firm\": boolean,\n  \"confidence\": \"high\" | \"medium\" | \"low\",\n  \"reasoning\": \"string\",\n  \"services_detected\": [\"string\"],\n  \"firm_type\": \"cpa\" | \"ea\" | \"tax_prep\" | \"bookkeeping\" | \"financial_services\" | \"unrelated\" | \"unknown\"\n}\n\nField definitions:\n- is_tax_firm: true if this business provides tax preparation or accounting services\n- confidence: your certainty level based on available evidence\n- reasoning: 1-2 sentence explanation of your classification\n- services_detected: list of specific services found on the site (e.g. [\"tax preparation\", \"bookkeeping\", \"payroll\", \"tax planning\"])\n- firm_type: the primary business category\n\nSignals FOR tax firm: tax preparation, tax filing, IRS, returns, refunds, bookkeeping, accounting services, CPA, EA, enrolled agent, tax season, e-file, 1040, W-2, tax planning, payroll.\nSignals AGAINST: directory listing, unrelated business, generic content, youth club, financial advisory only with no tax prep.\n\nDo NOT wrap your response in markdown code blocks. Return raw JSON only."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "bb859e5e-c461-485e-b33f-6e074ad16f49",
+      "name": "AI Classify Tax Firm",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        1472,
+        -992
+      ],
+      "executeOnce": false,
+      "alwaysOutputData": false,
+      "credentials": {
+        "openAiApi": {
+          "id": "h7dkB0sfsivC9wlc",
+          "name": "IRS Project"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst companyData = $('Loop Over Companies').item.json;\n\nlet classification = {};\ntry {\n  const aiResponse = items[0].json;\n  \n  const content = aiResponse.output?.[0]?.content?.[0]?.text\n    || aiResponse.message?.content\n    || aiResponse.content\n    || aiResponse.text\n    || JSON.stringify(aiResponse);\n  \n  const cleaned = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  classification = JSON.parse(cleaned);\n} catch (e) {\n  classification = {\n    is_tax_firm: 'parse_error',\n    confidence: 'low',\n    firm_type: 'unknown',\n    services_detected: [],\n    reasoning: 'Failed to parse: ' + e.message\n  };\n}\n\nreturn [{\n  json: {\n    ein: companyData.ein,\n    legal_name: companyData.legal_name,\n    dba_name: companyData.dba_name,\n    website_scraped: companyData.company_website,\n    is_tax_firm: classification.is_tax_firm ?? 'unknown',\n    confidence: classification.confidence || 'low',\n    firm_type: classification.firm_type || 'unknown',\n    services_detected: Array.isArray(classification.services_detected) \n      ? classification.services_detected.join(', ') \n      : (classification.services_detected || ''),\n    reasoning: classification.reasoning || 'No classification available'\n  }\n}];"
+      },
+      "id": "74fb0b60-396f-4c66-9297-1e8fdd2626c9",
+      "name": "Format for Google Sheets",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1856,
+        -848
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI/edit?gid=0#gid=0"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Final Outut: Find",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "ein",
+              "displayName": "ein",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "legal_name",
+              "displayName": "legal_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "dba_name",
+              "displayName": "dba_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "website_scraped",
+              "displayName": "website_scraped",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "is_tax_firm",
+              "displayName": "is_tax_firm",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "firm_type",
+              "displayName": "firm_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "services_detected",
+              "displayName": "services_detected",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "reasoning",
+              "displayName": "reasoning",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "91127cd2-20a1-43c6-96b9-f6eb3ce7ce1b",
+      "name": "Append to Results Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2176,
+        -720
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BoDXRlwL0pSPCOOZ",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI",
+          "mode": "list",
+          "cachedResultName": "IRS Project Output",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Final Outut: Find",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -16,
+        -672
+      ],
+      "id": "393ef00a-3e5c-4d48-aa6e-5b8e41fac0b4",
+      "name": "Read Results Sheet",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BoDXRlwL0pSPCOOZ",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0APH6RJ3UJ",
+          "mode": "id"
+        },
+        "text": "=No new companies to process. \nClay Output: {{ $('Read Clay Output').all().length }} rows. \nAlready processed: {{ new Set($('Read Results Sheet').all().map(i => String(i.json.ein))).size }} unique companies.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        768,
+        -288
+      ],
+      "id": "21806ea6-ee8d-4515-a1e0-ccb1e00817ad",
+      "name": "Send a message",
+      "webhookId": "f370efe3-ed5f-4400-ae39-a06cc9c00c11",
+      "credentials": {
+        "slackApi": {
+          "id": "C5N24ycZoj4FLoNL",
+          "name": "Slack account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "29af04e2-c49d-4bdb-b43a-3d617ad6626e",
+              "leftValue": "={{ $json.ein }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        400,
+        -416
+      ],
+      "id": "52aaac09-eabe-460c-90ae-491812cde0d6",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "=C0APH6RJ3UJ",
+          "mode": "id"
+        },
+        "text": "=Pipeline complete. Processed {{ $('Select Best Domain').all().length }} new companies.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        976,
+        -1056
+      ],
+      "id": "03f150a9-ee36-4b08-baca-508c7cad4ed7",
+      "name": "Send a message1",
+      "webhookId": "f370efe3-ed5f-4400-ae39-a06cc9c00c11",
+      "credentials": {
+        "slackApi": {
+          "id": "C5N24ycZoj4FLoNL",
+          "name": "Slack account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "fc-cond-001",
+              "leftValue": "={{ $json.clay_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        272,
+        624
+      ],
+      "id": "50927b5b-6540-4118-ac99-8aa79b42b617",
+      "name": "Has New Companies?"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0APH6RJ3UJ",
+          "mode": "id"
+        },
+        "text": "=No new companies to process from Find Companies source.\nClay Output: {{ $('Read Clay Find + Enrich Companies Sheet').all().length }} rows.\nAlready processed: {{ new Set($('Read Results Sheet 2').all().map(i => String(i.json.website_scraped || '').toLowerCase())).size }} unique domains.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        688,
+        864
+      ],
+      "id": "17e950ce-4df7-44f0-8b71-b2c29a433bc9",
+      "name": "Slack No New Data",
+      "webhookId": "f370efe3-ed5f-4400-ae39-a06cc9c00c11",
+      "credentials": {
+        "slackApi": {
+          "id": "C5N24ycZoj4FLoNL",
+          "name": "Slack account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0APH6RJ3UJ",
+          "mode": "id"
+        },
+        "text": "=Find Companies pipeline complete. Processed {{ $('Select Best Domain 2').all().length }} new companies.",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        1040,
+        -64
+      ],
+      "id": "23accef5-a3f9-4cb6-ad44-ac38bb53ca1f",
+      "name": "Slack Pipeline Complete",
+      "webhookId": "f370efe3-ed5f-4400-ae39-a06cc9c00c11",
+      "credentials": {
+        "slackApi": {
+          "id": "C5N24ycZoj4FLoNL",
+          "name": "Slack account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5.2",
+          "mode": "list",
+          "cachedResultName": "GPT-5.2"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=Company: {{ $('Loop Over Companies 2').item.json.company_name }}\nDomain: {{ $('Loop Over Companies 2').item.json.domain }}\nLocation: {{ $('Loop Over Companies 2').item.json.location }}\nCompany Size: {{ $('Loop Over Companies 2').item.json.size }}\nAnnual Revenue: {{ $('Loop Over Companies 2').item.json.annual_revenue }}\nLinkedIn: {{ $('Loop Over Companies 2').item.json.linkedin_url }}\n\nWebsite Content:\n{{ $json.data?.markdown ? $json.data.markdown.substring(0, 3000) : ($json.markdown ? $json.markdown.substring(0, 3000) : 'No website content available - classify based on company name and metadata only') }}"
+            },
+            {
+              "role": "system",
+              "content": "=You are a business classifier specializing in identifying tax preparation and accounting firms. Analyze the provided website content and company information. Determine if this is a legitimate tax preparation or accounting firm that actively files tax returns for clients.\n\nYou MUST respond with ONLY a valid JSON object matching this exact schema, no other text or markdown:\n\n{\n  \"is_tax_firm\": boolean,\n  \"confidence\": \"high\" | \"medium\" | \"low\",\n  \"reasoning\": \"string\",\n  \"services_detected\": [\"string\"],\n  \"firm_type\": \"cpa\" | \"ea\" | \"tax_prep\" | \"bookkeeping\" | \"financial_services\" | \"unrelated\" | \"unknown\"\n}\n\nField definitions:\n- is_tax_firm: true if this business provides tax preparation or accounting services\n- confidence: your certainty level based on available evidence\n- reasoning: 1-2 sentence explanation of your classification\n- services_detected: list of specific services found on the site (e.g. [\"tax preparation\", \"bookkeeping\", \"payroll\", \"tax planning\"])\n- firm_type: the primary business category\n\nSignals FOR tax firm: tax preparation, tax filing, IRS, returns, refunds, bookkeeping, accounting services, CPA, EA, enrolled agent, tax season, e-file, 1040, W-2, tax planning, payroll.\nSignals AGAINST: directory listing, unrelated business, generic content, software company, government website, financial advisory only with no tax prep.\n\nDo NOT wrap your response in markdown code blocks. Return raw JSON only."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "ee2ddcad-7437-4716-9765-6e7375253f91",
+      "name": "AI Classify Tax Firm1",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        1504,
+        192
+      ],
+      "executeOnce": false,
+      "alwaysOutputData": false,
+      "credentials": {
+        "openAiApi": {
+          "id": "h7dkB0sfsivC9wlc",
+          "name": "IRS Project"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI",
+          "mode": "list",
+          "cachedResultName": "IRS Project Output",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 214191659,
+          "mode": "list",
+          "cachedResultName": "Final Output: Find + Enrich",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI/edit#gid=214191659"
+        },
+        "options": {}
+      },
+      "id": "ca5d1c07-a685-48cd-96f0-bfb447882e28",
+      "name": "Read Results Sheet 2",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -224,
+        544
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BoDXRlwL0pSPCOOZ",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Clay Find Companies rows — reference by node name\nconst clayRows = $('Read Clay Find + Enrich Companies Sheet').all();\n\n// Already-processed rows from Results sheet — handle empty sheet\nconst processedItems = $input.all();\nlet processedIDs = new Set();\n\ntry {\n  // Only build the set if results sheet has data with clay_id column\n  if (processedItems.length > 0 && processedItems[0].json.clay_id !== undefined) {\n    processedIDs = new Set(\n      processedItems.map(item => String(item.json.clay_id || '')).filter(id => id !== '')\n    );\n  }\n} catch (e) {\n  // First run — results sheet is empty or has no columns yet\n  processedIDs = new Set();\n}\n\nfunction cleanUrl(url) {\n  if (!url) return '';\n  url = url.trim();\n  if (!url.startsWith('http')) return 'https://' + url;\n  return url;\n}\n\n// Filter to only NEW rows not yet in results\nconst newRows = clayRows.filter(item => {\n  const id = String(item.json.Clay_ID || '');\n  return id && !processedIDs.has(id);\n});\n\n// Map to standard format for downstream nodes\nconst results = newRows.map(item => {\n  const d = item.json;\n  const domain = (d.Domain || '').trim();\n  \n  if (!domain) return null;\n\n  return {\n    json: {\n      clay_id: d.Clay_ID || '',\n      company_name: d.Name || '',\n      domain: domain,\n      company_website: cleanUrl(domain),\n      linkedin_url: d.LinkedIn_url || '',\n      size: d.Size || '',\n      annual_revenue_lower: d.Annual_Revenue_Lower_Bound || '',\n      annual_revenue_upper: d.Annual_Revenue_Upper_Bound || '',\n      annual_revenue: d['Annual Revenue'] || '',\n      location: d.Location || ''\n    }\n  };\n}).filter(item => item !== null);\n\nreturn results;"
+      },
+      "id": "6c905455-5ba3-436e-b144-aa0098e056b9",
+      "name": "Select Best Domain 2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        592
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "2fc5f037-cbfe-46ac-9ec0-ea38b5a4816f",
+      "name": "Loop Over Companies 2",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        656,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "scrape",
+        "url": "={{ $json.company_website }}",
+        "scrapeOptions": {
+          "options": {
+            "formats": {
+              "format": [
+                {}
+              ]
+            },
+            "headers": {}
+          }
+        },
+        "requestOptions": {}
+      },
+      "id": "7cedbca1-6e89-40b5-88f1-2bc6b312ccea",
+      "name": "Firecrawl Scrape 2",
+      "type": "@mendable/n8n-nodes-firecrawl.firecrawl",
+      "typeVersion": 1,
+      "position": [
+        1280,
+        208
+      ],
+      "credentials": {
+        "firecrawlApi": {
+          "id": "YYUiHhRb25DyHobf",
+          "name": "Firecrawl API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst companyData = $('Loop Over Companies 2').item.json;\n\nlet classification = {};\ntry {\n  const aiResponse = items[0].json;\n  \n  const content = aiResponse.output?.[0]?.content?.[0]?.text\n    || aiResponse.message?.content\n    || aiResponse.content\n    || aiResponse.text\n    || JSON.stringify(aiResponse);\n  \n  const cleaned = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  classification = JSON.parse(cleaned);\n} catch (e) {\n  classification = {\n    is_tax_firm: 'parse_error',\n    confidence: 'low',\n    firm_type: 'unknown',\n    services_detected: [],\n    reasoning: 'Failed to parse: ' + e.message\n  };\n}\n\nreturn [{\n  json: {\n    clay_id: companyData.clay_id,\n    company_name: companyData.company_name,\n    website_scraped: companyData.company_website,\n    size: companyData.size,\n    annual_revenue: companyData.annual_revenue,\n    location: companyData.location,\n    is_tax_firm: classification.is_tax_firm ?? 'unknown',\n    confidence: classification.confidence || 'low',\n    firm_type: classification.firm_type || 'unknown',\n    services_detected: Array.isArray(classification.services_detected) \n      ? classification.services_detected.join(', ') \n      : (classification.services_detected || ''),\n    reasoning: classification.reasoning || 'No classification available'\n  }\n}];"
+      },
+      "id": "7f8ea467-7d5d-4772-835e-b474d8e065d4",
+      "name": "Format for Google Sheets 2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1840,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI/edit?gid=214191659#gid=214191659",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 214191659,
+          "mode": "list",
+          "cachedResultName": "Final Output: Find + Enrich",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI/edit#gid=214191659"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "clay_id",
+              "displayName": "clay_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "company_name",
+              "displayName": "company_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "website_scraped",
+              "displayName": "website_scraped",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "size",
+              "displayName": "size",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "annual_revenue",
+              "displayName": "annual_revenue",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "location",
+              "displayName": "location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "is_tax_firm",
+              "displayName": "is_tax_firm",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "firm_type",
+              "displayName": "firm_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "services_detected",
+              "displayName": "services_detected",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "reasoning",
+              "displayName": "reasoning",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "1437dfb6-ff5b-4196-9103-701ab858923a",
+      "name": "Append to Results Sheet 2",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2096,
+        224
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BoDXRlwL0pSPCOOZ",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "id": "963fcdfa-41a4-458e-847b-ded0c82fb6ed",
+      "name": "Rate Limit Delay 2",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2320,
+        448
+      ],
+      "webhookId": "fc-wait-webhook"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/1bHruYu5TiWrYruBZITFwb3Hduz6np1-HIf9eMqZfgOA/edit?gid=317449284#gid=317449284"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 317449284,
+          "mode": "list",
+          "cachedResultName": "Clay Output: Find + Enrich",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1bHruYu5TiWrYruBZITFwb3Hduz6np1-HIf9eMqZfgOA/edit#gid=317449284"
+        },
+        "options": {}
+      },
+      "id": "a267c318-112b-4be5-a79d-e5fdf6906d8e",
+      "name": "Read Clay Find + Enrich Companies Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -576,
+        416
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BoDXRlwL0pSPCOOZ",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Clay Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Clay Output": {
+      "main": [
+        [
+          {
+            "node": "Read Results Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Best Domain": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Companies": {
+      "main": [
+        [
+          {
+            "node": "Send a message1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Firecrawl Scrape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firecrawl Scrape": {
+      "main": [
+        [
+          {
+            "node": "AI Classify Tax Firm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Classify Tax Firm": {
+      "main": [
+        [
+          {
+            "node": "Format for Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format for Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Append to Results Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append to Results Sheet": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Results Sheet": {
+      "main": [
+        [
+          {
+            "node": "Select Best Domain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Companies",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has New Companies?": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Companies 2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack No New Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Classify Tax Firm1": {
+      "main": [
+        [
+          {
+            "node": "Format for Google Sheets 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Results Sheet 2": {
+      "main": [
+        [
+          {
+            "node": "Select Best Domain 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Best Domain 2": {
+      "main": [
+        [
+          {
+            "node": "Has New Companies?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Companies 2": {
+      "main": [
+        [
+          {
+            "node": "Slack Pipeline Complete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Firecrawl Scrape 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firecrawl Scrape 2": {
+      "main": [
+        [
+          {
+            "node": "AI Classify Tax Firm1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format for Google Sheets 2": {
+      "main": [
+        [
+          {
+            "node": "Append to Results Sheet 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append to Results Sheet 2": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit Delay 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit Delay 2": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Companies 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Clay Find + Enrich Companies Sheet": {
+      "main": [
+        [
+          {
+            "node": "Read Results Sheet 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "147eedb3-003e-4fab-aa07-896fd598f159",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "eb0a108dddce74d66359c957677d7a59b741d7707560d3ce8140027cf357bf99"
+  },
+  "nodeGroups": [],
+  "id": "lopMYyz1Ih2I4vXo",
+  "tags": [
+    {
+      "updatedAt": "2026-03-29T16:07:33.711Z",
+      "createdAt": "2026-03-29T16:07:33.711Z",
+      "id": "CeSGB0OyklJhmxWz",
+      "name": "Find Companies"
+    },
+    {
+      "updatedAt": "2026-03-27T21:29:46.278Z",
+      "createdAt": "2026-03-27T21:29:46.278Z",
+      "id": "YqFQOcEcdVOfMaA1",
+      "name": "GTM Pipeline"
+    },
+    {
+      "updatedAt": "2026-03-28T15:31:14.553Z",
+      "createdAt": "2026-03-28T15:31:14.553Z",
+      "id": "Z4d3mAMFXhZfomY8",
+      "name": "AI Classification"
+    },
+    {
+      "updatedAt": "2026-03-28T15:14:17.228Z",
+      "createdAt": "2026-03-28T15:14:17.228Z",
+      "id": "wl2XrXczbxUEO7vw",
+      "name": "Competitor Scraping"
+    }
+  ]
+}

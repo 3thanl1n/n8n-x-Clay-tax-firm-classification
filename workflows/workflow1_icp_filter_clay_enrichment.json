@@ -1,0 +1,354 @@
+{
+  "name": "ICP Filter & Clay Enrichment Final",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "42e563a4-c6aa-4544-a810-068dac225406",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1200,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  ein,\n  legal_name,\n  dba_name,\n  city,\n  state,\n  ROUND(AVG(total_returns)::numeric, 0) AS avg_returns_2yr\nFROM irs_filings\nWHERE \n  filing_year >= (EXTRACT(YEAR FROM CURRENT_DATE) - 2)\nGROUP BY \n  ein, legal_name, dba_name, city, state\nHAVING \n  AVG(total_returns) >= {{ $json.min_returns_threshold || 400 }}\nORDER BY avg_returns_2yr DESC\nLIMIT 1000;",
+        "options": {}
+      },
+      "id": "c0d81753-f37e-4859-9cce-335e8c197c69",
+      "name": "Query IRS Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -928,
+        -128
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bcbPnjbn3NseMSlN",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/1l8W1SYddrX2J2qQ_rDv1W6HlkVKAlrsb9oNi3ZPdQNI/edit?gid=0#gid=0"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gid=0"
+        },
+        "options": {}
+      },
+      "id": "acdce259-e592-4929-a205-6dc5eae2ff23",
+      "name": "Read Results Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -688,
+        -128
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BoDXRlwL0pSPCOOZ",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// IRS query results — reference by node name\nconst queryRows = $('Query IRS Data').all();\n\n// Already-processed rows from Results sheet — handle empty sheet\nconst processedItems = $input.all();\nlet processedEINs = new Set();\n\ntry {\n  if (processedItems.length > 0 && processedItems[0].json.ein !== undefined) {\n    processedEINs = new Set(\n      processedItems.map(item => String(item.json.ein || '')).filter(id => id !== '')\n    );\n  }\n} catch (e) {\n  processedEINs = new Set();\n}\n\n// Filter to only NEW firms not yet in results\nconst newRows = queryRows.filter(item => {\n  const ein = String(item.json.ein || '');\n  return ein && !processedEINs.has(ein);\n});\n\n// Format for Clay webhook\nconst results = newRows.map(item => {\n  return {\n    json: {\n      ein: item.json.ein,\n      legal_name: item.json.legal_name,\n      dba_name: item.json.dba_name,\n      city: item.json.city,\n      state: item.json.state,\n      avg_returns_2yr: item.json.avg_returns_2yr\n    }\n  };\n});\n\nreturn results;"
+      },
+      "id": "adc1e573-9315-488f-8acb-5258d6415026",
+      "name": "Filter New & Format for Clay",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -416,
+        -64
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "w1-cond-001",
+              "leftValue": "={{ $json.ein }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -192,
+        -16
+      ],
+      "id": "3780cfc7-d99e-4f61-b441-c387e8f08ed1",
+      "name": "Has New Companies?"
+    },
+    {
+      "parameters": {},
+      "id": "191273d5-95ab-407c-886f-428eae7a135f",
+      "name": "No New Data",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        0,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 5,
+        "options": {}
+      },
+      "id": "42d9e252-7774-47ad-a776-6dff3e8ea4d9",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        176,
+        -224
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "YOUR_CLAY_WEBHOOK_URL",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_CLAY_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "ein",
+              "value": "={{ $json.ein }}"
+            },
+            {
+              "name": "organization_name",
+              "value": "={{ $json.legal_name }}"
+            },
+            {
+              "name": "city",
+              "value": "={{ $json.city }}"
+            },
+            {
+              "name": "state",
+              "value": "={{ $json.state }}"
+            },
+            {
+              "name": "avg_returns_2yr",
+              "value": "={{ $json.avg_returns_2yr }}"
+            },
+            {
+              "name": "dba_name",
+              "value": "={{$json.dba_name}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "acee4a12-abb0-4ede-a2c2-c9463a23dbae",
+      "name": "Send to Clay Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        512,
+        -128
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "08371a59-1332-4799-a856-fb93fae3685a",
+      "name": "Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        336,
+        -416
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 0.5
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        832,
+        0
+      ],
+      "id": "c5630292-ba83-42fe-8b15-f3ff8a7b0d6d",
+      "name": "Wait",
+      "webhookId": "cae69b4e-a90a-444d-b16e-572c69d4a1fc"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Query IRS Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query IRS Data": {
+      "main": [
+        [
+          {
+            "node": "Read Results Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Results Sheet": {
+      "main": [
+        [
+          {
+            "node": "Filter New & Format for Clay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New & Format for Clay": {
+      "main": [
+        [
+          {
+            "node": "Has New Companies?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has New Companies?": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No New Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send to Clay Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to Clay Webhook": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "205a2c09-3a9d-4ad1-959e-b92a14fa9393",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "eb0a108dddce74d66359c957677d7a59b741d7707560d3ce8140027cf357bf99"
+  },
+  "nodeGroups": [],
+  "id": "zIlhly5AXDehYm6H",
+  "tags": [
+    {
+      "updatedAt": "2026-03-27T21:29:46.278Z",
+      "createdAt": "2026-03-27T21:29:46.278Z",
+      "id": "YqFQOcEcdVOfMaA1",
+      "name": "GTM Pipeline"
+    },
+    {
+      "updatedAt": "2026-03-27T21:29:46.240Z",
+      "createdAt": "2026-03-27T21:29:46.240Z",
+      "id": "lbiPVGKwxpmNItOh",
+      "name": "ICP Filtering"
+    }
+  ]
+}
